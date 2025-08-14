@@ -35,3 +35,8 @@ export const addTrackSchema = z.object({
 export const voteSkipSchema = z.object({
     roomId: z.string().min(1),
 });
+
+// HTTP Request
+export const searchQuerySchema = z.object({
+    q: z.string().min(1, "Query must be at least 1 character"),
+});

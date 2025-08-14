@@ -11,7 +11,7 @@ import {
 } from "./types/events";
 import { TTLCache } from "./lib/cache";
 import { User } from "./types/user";
-import {addTrackSchema, joinRoomSchema, leaveRoomSchema, voteSkipSchema} from "./src/schema";
+import {addTrackSchema, joinRoomSchema, leaveRoomSchema, searchQuerySchema, voteSkipSchema} from "./src/schema";
 
 dotenv.config({ path: ".env.local" });
 const log = pino();
@@ -34,7 +34,13 @@ const searchCache = new TTLCache<any[]>(5 * 60 * 1000); // 5 minutes TTL
 
 // ---------- REST: YouTube Search ----------
 app.get("/search", async (req, res) => {
-    const query = req.query.q?.toString();
+    const parsed = searchQuerySchema.safeParse(req.query);
+
+    if (!parsed.success) {
+        return res.status(400).json({ error: 'Invalid query.'});
+    }
+
+    const { q: query } = parsed.data;
     if (!query) return res.status(400).json({ error: "Missing query" });
 
     // Check cache first
