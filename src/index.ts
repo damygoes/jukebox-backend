@@ -10,8 +10,9 @@ import {
     ServerToClientEvents,
     User,
 } from "./types/events";
+import {TTLCache} from "./lib/cache";
 
-dotenv.config();
+dotenv.config({ path: ".env.local" });
 const log = pino();
 
 const app = express();
@@ -28,6 +29,50 @@ const io = new IOServer<ClientToServerEvents, ServerToClientEvents>(server, {
 });
 
 const rooms = new RoomManager();
+
+const searchCache = new TTLCache<any[]>(5 * 60 * 1000); // 5 minutes TTL
+
+app.get("/search", async (req, res) => {
+    const query = req.query.q?.toString();
+    if (!query) return res.status(400).json({ error: "Missing query" });
+
+    // Check cache first
+    const cached = searchCache.get(query);
+    if (cached) return res.json(cached);
+
+    try {
+        const key = process.env.YOUTUBE_API_KEY;
+        if (!key) {
+            return res.status(500).json({ error: "Missing YouTube API key" });
+        }
+
+        const url = new URL("https://www.googleapis.com/youtube/v3/search");
+        url.searchParams.set("part", "snippet");
+        url.searchParams.set("q", query);
+        url.searchParams.set("type", "video");
+        url.searchParams.set("maxResults", "10");
+        url.searchParams.set("key", key);
+
+        const response = await fetch(url.toString());
+        if (!response.ok) {
+            return res.status(500).json({ error: "YouTube API error" });
+        }
+        const data = await response.json();
+        const results = data.items.map((item: any) => ({
+            id: item.id.videoId,
+            title: item.snippet.title,
+            channel: item.snippet.channelTitle,
+            thumbnail: item.snippet.thumbnails.default.url,
+        }));
+
+        searchCache.set(query, results);
+        res.json(results);
+    } catch (err: any) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 
 io.on("connection", (socket) => {
     log.info({ id: socket.id }, "socket connected");
@@ -63,7 +108,7 @@ io.on("connection", (socket) => {
     socket.on("join_room", ({ roomId, nickname }) => {
         const user: User = { id: socket.id, nickname };
         const room = rooms.joinRoom(roomId, socket.id, user);
-
+        if (!room) return;
         socket.join(roomId);
         io.to(roomId).emit("room_state", rooms.getRoomState(roomId)!);
 
