@@ -11,6 +11,7 @@ import {
 } from "./types/events";
 import { TTLCache } from "./lib/cache";
 import { User } from "./types/user";
+import {addTrackSchema, joinRoomSchema, leaveRoomSchema, voteSkipSchema} from "./src/schema";
 
 dotenv.config({ path: ".env.local" });
 const log = pino();
@@ -103,7 +104,13 @@ setInterval(() => {
 io.on("connection", (socket) => {
     log.info({ id: socket.id }, "socket connected");
 
-    socket.on("join_room", ({ roomId, nickname }) => {
+    socket.on("join_room", (payload) => {
+        const parsed = joinRoomSchema.safeParse(payload);
+        if (!parsed.success) {
+            socket.emit("error", { message: "Invalid join_room payload" });
+            return;
+        }
+        const { roomId, nickname } = parsed.data;
         const user: User = { id: socket.id, nickname };
         const room = rooms.joinRoom(roomId, socket.id, user);
         if (!room) return;
@@ -116,7 +123,13 @@ io.on("connection", (socket) => {
         }
     });
 
-    socket.on("leave_room", ({ roomId }) => {
+    socket.on("leave_room", (payload) => {
+        const parsed = leaveRoomSchema.safeParse(payload);
+        if (!parsed.success) {
+            socket.emit("error", { message: "Invalid leave_room payload" });
+            return;
+        }
+        const { roomId } = parsed.data;
         rooms.leaveRoom(roomId, socket.id);
         io.to(roomId).emit(
             "room_state",
@@ -125,12 +138,24 @@ io.on("connection", (socket) => {
         socket.leave(roomId);
     });
 
-    socket.on("add_track", ({ roomId, track }) => {
+    socket.on("add_track", (payload) => {
+        const parsed = addTrackSchema.safeParse(payload);
+        if (!parsed.success) {
+            socket.emit("error", { message: "Invalid add_track payload" });
+            return;
+        }
+        const { roomId, track } = parsed.data;
         rooms.addTrack(roomId, track);
         io.to(roomId).emit("room_state", rooms.getRoomState(roomId)!);
     });
 
-    socket.on("vote_skip", ({ roomId }) => {
+    socket.on("vote_skip", (payload) => {
+        const parsed = voteSkipSchema.safeParse(payload);
+        if (!parsed.success) {
+            socket.emit("error", { message: "Invalid vote_skip payload" });
+            return;
+        }
+        const { roomId } = parsed.data;
         const current = rooms.getRoomState(roomId)?.current;
         if (current) {
             rooms.voteSkip(roomId, current.trackId);
