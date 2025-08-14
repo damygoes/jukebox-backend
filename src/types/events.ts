@@ -1,27 +1,7 @@
-// Common types
-export type RoomId = string;
-export type UserId = string;
-export type TrackId = string;
-
-export interface User {
-    id: UserId;
-    nickname: string;
-}
-
-export interface QueueItem {
-    id: string; // uuid
-    trackId: TrackId;
-    title: string;
-    durationSec: number;
-    addedBy: User;
-    votes: number;
-}
-
-export interface CurrentPlayback {
-    trackId: TrackId;
-    startedAtServerTs: number; // server timestamp in ms
-    positionSec: number; // last-known position
-}
+import {User} from "./user";
+import {CurrentPlayback, TrackId} from "./track";
+import {RoomId} from "./room";
+import {QueueItem} from "./QueueItem";
 
 // ======================
 // Client → Server Events

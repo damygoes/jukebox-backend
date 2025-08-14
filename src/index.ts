@@ -8,9 +8,9 @@ import { RoomManager } from "./lib/rooms";
 import {
     ClientToServerEvents,
     ServerToClientEvents,
-    User,
 } from "./types/events";
-import {TTLCache} from "./lib/cache";
+import { TTLCache } from "./lib/cache";
+import { User } from "./types/user";
 
 dotenv.config({ path: ".env.local" });
 const log = pino();
@@ -29,9 +29,9 @@ const io = new IOServer<ClientToServerEvents, ServerToClientEvents>(server, {
 });
 
 const rooms = new RoomManager();
-
 const searchCache = new TTLCache<any[]>(5 * 60 * 1000); // 5 minutes TTL
 
+// ---------- REST: YouTube Search ----------
 app.get("/search", async (req, res) => {
     const query = req.query.q?.toString();
     if (!query) return res.status(400).json({ error: "Missing query" });
@@ -73,37 +73,35 @@ app.get("/search", async (req, res) => {
     }
 });
 
+// ---------- Timers (GLOBAL) ----------
+const PLAYBACK_CHECK_INTERVAL = 1000;
+const SYNC_INTERVAL = 5000;
 
+// Auto-progress tracks every second
+setInterval(() => {
+    for (const roomId of rooms.getAllRoomIds()) {
+        const newTrack = rooms.startNextTrackIfNeeded(roomId);
+        const state = rooms.getRoomState(roomId);
+        if (!newTrack || !state) return;
+
+        io.to(roomId).emit("room_state", state);
+        io.to(roomId).emit("track_started", { roomId, track: newTrack });
+    }
+}, PLAYBACK_CHECK_INTERVAL);
+
+// Sync playback position every 5 seconds
+setInterval(() => {
+    for (const roomId of rooms.getAllRoomIds()) {
+        const current = rooms.getCurrentTrack(roomId);
+        if (!current) continue;
+        const positionSec = (Date.now() - current.startedAtServerTs) / 1000;
+        io.to(roomId).emit("playback_synced", { roomId, positionSec });
+    }
+}, SYNC_INTERVAL);
+
+// ---------- Socket.IO events ----------
 io.on("connection", (socket) => {
     log.info({ id: socket.id }, "socket connected");
-
-    const PLAYBACK_CHECK_INTERVAL = 1000; // check every second
-
-    setInterval(() => {
-        rooms.getAllRoomIds().forEach((roomId) => {
-            const current = rooms.startNextTrackIfNeeded(roomId);
-            if (current) {
-                io.to(roomId).emit("track_started", { roomId, track: current });
-            }
-        });
-    }, PLAYBACK_CHECK_INTERVAL);
-
-    /*
-  * Even with server timestamps, network latency can cause slight offsets. Clients should periodically adjust playback:
-  •	Server emits playback_synced every ~5–10 seconds with:
-  •	positionSec → how far the track has progressed.
-  •	Clients compare server time + offset with their local player and adjust slightly.
-  */
-    const SYNC_INTERVAL = 5000;
-
-    setInterval(() => {
-        rooms.getAllRoomIds().forEach((roomId) => {
-            const current = rooms.getCurrentTrack(roomId);
-            if (!current) return;
-            const positionSec = (Date.now() - current.startedAtServerTs) / 1000;
-            io.to(roomId).emit("playback_synced", { roomId, positionSec });
-        });
-    }, SYNC_INTERVAL);
 
     socket.on("join_room", ({ roomId, nickname }) => {
         const user: User = { id: socket.id, nickname };
@@ -113,7 +111,6 @@ io.on("connection", (socket) => {
         io.to(roomId).emit("room_state", rooms.getRoomState(roomId)!);
 
         const currentTrack = rooms.getCurrentTrack(roomId);
-
         if (currentTrack) {
             socket.emit("track_started", { roomId, track: currentTrack });
         }
@@ -121,7 +118,10 @@ io.on("connection", (socket) => {
 
     socket.on("leave_room", ({ roomId }) => {
         rooms.leaveRoom(roomId, socket.id);
-        io.to(roomId).emit("room_state", rooms.getRoomState(roomId) ?? { roomId, users: [], queue: [] });
+        io.to(roomId).emit(
+            "room_state",
+            rooms.getRoomState(roomId) ?? { roomId, users: [], queue: [] }
+        );
         socket.leave(roomId);
     });
 
@@ -140,8 +140,14 @@ io.on("connection", (socket) => {
 
     socket.on("disconnect", (reason) => {
         log.info({ id: socket.id, reason }, "socket disconnected");
-        // Clean up user from all rooms they were in
-        rooms.leaveRoom(socket.id as any, socket.id);
+        // Remove the user from all rooms they might be in
+        for (const roomId of rooms.getAllRoomIds()) {
+            rooms.leaveRoom(roomId, socket.id);
+            io.to(roomId).emit(
+                "room_state",
+                rooms.getRoomState(roomId) ?? { roomId, users: [], queue: [] }
+            );
+        }
     });
 });
 

@@ -1,22 +1,12 @@
-import {
-    RoomId,
-    User,
-    QueueItem,
-    CurrentPlayback,
-    TrackId,
-} from "../types/events";
-
-interface Room {
-    id: RoomId;
-    users: Map<string, User>; // socketId → User
-    queue: QueueItem[];
-    current?: CurrentPlayback | null;
-}
+import {Room, RoomId, RoomState} from "../types/room";
+import { User } from "../types/user";
+import { QueueItem } from "../types/QueueItem";
+import {CurrentPlayback, TrackId} from "../types/track";
 
 export class RoomManager {
     private rooms: Map<RoomId, Room> = new Map();
 
-    joinRoom(roomId: RoomId, socketId: string, user: User) {
+    joinRoom(roomId: RoomId, socketId: string, user: User): Room {
         if (!this.rooms.has(roomId)) {
             this.rooms.set(roomId, {
                 id: roomId,
@@ -30,7 +20,7 @@ export class RoomManager {
         return room;
     }
 
-    leaveRoom(roomId: RoomId, socketId: string) {
+    leaveRoom(roomId: RoomId, socketId: string): void {
         const room = this.rooms.get(roomId);
         if (!room) return;
         room.users.delete(socketId);
@@ -39,15 +29,21 @@ export class RoomManager {
         }
     }
 
-    addTrack(roomId: RoomId, track: Omit<QueueItem, "votes">) {
+    addTrack(roomId: RoomId, track: Omit<QueueItem, "votes">): QueueItem | null {
         const room = this.rooms.get(roomId);
-        if (!room) return;
+        if (!room) return null;
         const trackWithVotes: QueueItem = { ...track, votes: 0 };
         room.queue.push(trackWithVotes);
+
+        // 🆕 If nothing is playing, start immediately
+        if (!room.current) {
+            this.startNextTrack(roomId);
+        }
+
         return trackWithVotes;
     }
 
-    voteSkip(roomId: RoomId, trackId: TrackId) {
+    voteSkip(roomId: RoomId, trackId: TrackId): void {
         const room = this.rooms.get(roomId);
         if (!room) return;
         const track = room.queue.find((t) => t.id === trackId);
@@ -56,49 +52,59 @@ export class RoomManager {
         }
     }
 
-    startNextTrack(roomId: RoomId) {
+    startNextTrack(roomId: RoomId): CurrentPlayback | null {
         const room = this.rooms.get(roomId);
-        if (!room || room.queue.length === 0) return;
+        if (!room || room.queue.length === 0) {
+            room!.current = null;
+            return null;
+        }
         const nextTrack = room.queue.shift()!;
         room.current = {
             trackId: nextTrack.trackId,
             startedAtServerTs: Date.now(),
             positionSec: 0,
+            durationSec: nextTrack.durationSec, // 🆕 include duration
+            title: nextTrack.title, // optional: send title for frontend display
         };
         return room.current;
     }
 
-    getRoomState(roomId: RoomId) {
+    getRoomState(roomId: RoomId): RoomState | null {
         const room = this.rooms.get(roomId);
-        if (!room) return null;
+        if (!room) {
+            throw new Error(`Room ${roomId} not found`);
+        }
         return {
             roomId: room.id,
             users: Array.from(room.users.values()),
             queue: room.queue,
-            current: room.current,
+            current: room.current
         };
     }
 
-    getCurrentTrack(roomId: RoomId) {
+    getCurrentTrack(roomId: RoomId): CurrentPlayback | null {
         const room = this.rooms.get(roomId);
         return room?.current ?? null;
     }
 
     // Automatically start next track if current is null or ended
-    startNextTrackIfNeeded(roomId: RoomId) {
+    startNextTrackIfNeeded(roomId: RoomId): CurrentPlayback | null {
         const room = this.rooms.get(roomId);
         if (!room) return null;
 
-        // If no current track OR duration has passed
-        if (
-            !room.current ||
-            (room.queue.length > 0 &&
-                Date.now() - room.current.startedAtServerTs >=
-                room.queue[0].durationSec * 1000)
-        ) {
-            const next = this.startNextTrack(roomId);
-            return next;
+        if (!room.current) {
+            return this.startNextTrack(roomId);
         }
+
+        // Check if track duration has passed
+        if (
+            room.current.durationSec &&
+            Date.now() - room.current.startedAtServerTs >=
+            room.current.durationSec * 1000
+        ) {
+            return this.startNextTrack(roomId);
+        }
+
         return room.current;
     }
 
