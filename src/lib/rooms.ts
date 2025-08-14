@@ -78,4 +78,31 @@ export class RoomManager {
             current: room.current,
         };
     }
+
+    getCurrentTrack(roomId: RoomId) {
+        const room = this.rooms.get(roomId);
+        return room?.current ?? null;
+    }
+
+    // Automatically start next track if current is null or ended
+    startNextTrackIfNeeded(roomId: RoomId) {
+        const room = this.rooms.get(roomId);
+        if (!room) return null;
+
+        // If no current track OR duration has passed
+        if (
+            !room.current ||
+            (room.queue.length > 0 &&
+                Date.now() - room.current.startedAtServerTs >=
+                room.queue[0].durationSec * 1000)
+        ) {
+            const next = this.startNextTrack(roomId);
+            return next;
+        }
+        return room.current;
+    }
+
+    getAllRoomIds(): RoomId[] {
+        return Array.from(this.rooms.keys());
+    }
 }

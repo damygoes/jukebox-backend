@@ -32,11 +32,46 @@ const rooms = new RoomManager();
 io.on("connection", (socket) => {
     log.info({ id: socket.id }, "socket connected");
 
+    const PLAYBACK_CHECK_INTERVAL = 1000; // check every second
+
+    setInterval(() => {
+        rooms.getAllRoomIds().forEach((roomId) => {
+            const current = rooms.startNextTrackIfNeeded(roomId);
+            if (current) {
+                io.to(roomId).emit("track_started", { roomId, track: current });
+            }
+        });
+    }, PLAYBACK_CHECK_INTERVAL);
+
+    /*
+  * Even with server timestamps, network latency can cause slight offsets. Clients should periodically adjust playback:
+  •	Server emits playback_synced every ~5–10 seconds with:
+  •	positionSec → how far the track has progressed.
+  •	Clients compare server time + offset with their local player and adjust slightly.
+  */
+    const SYNC_INTERVAL = 5000;
+
+    setInterval(() => {
+        rooms.getAllRoomIds().forEach((roomId) => {
+            const current = rooms.getCurrentTrack(roomId);
+            if (!current) return;
+            const positionSec = (Date.now() - current.startedAtServerTs) / 1000;
+            io.to(roomId).emit("playback_synced", { roomId, positionSec });
+        });
+    }, SYNC_INTERVAL);
+
     socket.on("join_room", ({ roomId, nickname }) => {
         const user: User = { id: socket.id, nickname };
         const room = rooms.joinRoom(roomId, socket.id, user);
-        io.to(roomId).emit("room_state", rooms.getRoomState(roomId)!);
+
         socket.join(roomId);
+        io.to(roomId).emit("room_state", rooms.getRoomState(roomId)!);
+
+        const currentTrack = rooms.getCurrentTrack(roomId);
+
+        if (currentTrack) {
+            socket.emit("track_started", { roomId, track: currentTrack });
+        }
     });
 
     socket.on("leave_room", ({ roomId }) => {
